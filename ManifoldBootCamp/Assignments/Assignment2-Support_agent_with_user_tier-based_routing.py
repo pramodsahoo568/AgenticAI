@@ -65,19 +65,11 @@ def vip_agent_node(state: SupportState):
 
 
 # Nodes
-def agent_node(state: SupportState):
+def standard_agent_node(state: SupportState):
     ''' Node to handle conversation. and tool calls'''
     messages = state["messages"]
     response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
-
-# Nodes billing_agent_node
-def billing_agent_node(state: SupportState):
-    ''' Node to handle billing/refund questions'''
-    messages = state["messages"]
-    response = llm_with_tools.invoke(messages)
-    return {"messages": [response]}
-
 
 def should_continue(state: SupportState) -> Literal["continue", "end"]:
     messages = state["messages"]
@@ -86,13 +78,18 @@ def should_continue(state: SupportState) -> Literal["continue", "end"]:
         return "end"
     return "continue"
 
+def route_back_to_agent(state: SupportState) -> str:
+    if state["user_tier"] == "vip":
+        return "vip_agent"
+    return "standard_agent"
+
+
 # Build graph
 workflow = StateGraph(SupportState)
 workflow.add_node("check_tier", check_user_tier_node)
 workflow.add_node("vip_agent", vip_agent_node)
-workflow.add_node("standard_agent", agent_node)
+workflow.add_node("standard_agent", standard_agent_node)
 workflow.add_node("tools", ToolNode(tools))
-workflow.add_node("billing_agent", billing_agent_node)
 
 # Set entry point
 workflow.set_entry_point("check_tier")
@@ -108,11 +105,36 @@ workflow.add_conditional_edges(
 )
 
 # Both agents can use tools
-workflow.add_edge("vip_agent", "tools")
-workflow.add_edge("standard_agent", "tools")
+#workflow.add_edge("vip_agent", "tools")
+#workflow.add_edge("standard_agent", "tools")
+
+# Agent → Tool OR End
+workflow.add_conditional_edges(
+    "standard_agent",
+    should_continue,
+    {
+        "continue": "tools",
+        "end": END
+    }
+)
+
+workflow.add_conditional_edges(
+    "vip_agent",
+    should_continue,
+    {
+        "continue": "tools",
+        "end": END
+    }
+)
 
 # Tools return to respective agents
-workflow.add_edge("tools", END)# Compile
+
+# Tool → Back to Correct Agent
+workflow.add_conditional_edges(
+    "tools",
+    route_back_to_agent
+)
+#workflow.add_edge("tools", END)# Compile
 
 app = workflow.compile()
 app.get_graph().draw_mermaid_png(output_file_path="support_agent_with_tools_anduser_tier.png")
